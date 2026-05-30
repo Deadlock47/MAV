@@ -1,0 +1,56 @@
+{
+  "name": "mav-desktop",
+  "version": "1.0.0",
+  "description": "Electron desktop shell for the MAV JAV and Mahwa catalogs.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "powershell -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; & .\\node_modules\\electron\\dist\\electron.exe .\"",
+    "start": "powershell -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; & .\\node_modules\\electron\\dist\\electron.exe .\"",
+    "build": "electron-builder --win nsis",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "electron",
+    "desktop",
+    "jav",
+    "manhwa"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "electron": "^42.3.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.mav.desktop",
+    "productName": "MAV Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "app/**/*",
+          "data/**/*",
+          "requirements.txt",
+          "!app/__pycache__/**/*",
+          "!data/test_*.duckdb"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "MAV-Desktop-${version}-Setup.${ext}"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+/* App-specific styles - most styling is handled by Tailwind CSS */
+
+/* Smooth color transitions for dark mode */
+:root {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
