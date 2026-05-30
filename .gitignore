@@ -1,2 +1,37 @@
+# Ignore Parquet and database cache files
 *.parquet
 *.duckdb
+db/*.parquet
+data/**/*.duckdb
+
+# Node.js dependencies and build outputs
+**/node_modules/
+**/dist/
+**/build/
+**/out/
+
+# Python artifacts
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+**/*.pyd
+**/env/
+**/venv/
+**/.venv/
+.env
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
