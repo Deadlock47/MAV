@@ -110,25 +110,37 @@ class DuckDBVideoRepository:
         limit: int = 24,
         offset: int = 0,
         query: str | None = None,
+        tags: list[str] | None = None,
+        actress: list[str] | None = None,
+        studio: str | None = None,
+        release_date: date | None = None,
+        dvd_only: bool = False,
     ) -> dict[str, Any]:
-        limit = max(1, min(limit, 60))
+        limit = max(1, min(limit, 500))
         offset = max(0, offset)
         normalized_query = (query or "").strip()
+        normalized_tags = [tag.strip() for tag in (tags or []) if tag.strip()]
+        normalized_actress = [name.strip() for name in (actress or []) if name.strip()]
+        normalized_studio = (studio or "").strip()
+        normalized_release_date = release_date
 
-        where_sql = ""
         params: list[Any] = []
+        joins: list[str] = []
+        where_clauses: list[str] = []
+
         if normalized_query:
             like_query = f"%{normalized_query}%"
             prefix_query = f"{normalized_query}%"
-            where_sql = """
-                WHERE
-                    LOWER(v.content_id) = LOWER(?)
-                    OR UPPER(COALESCE(v.dvd_id, '')) = UPPER(?)
-                    OR LOWER(v.content_id) LIKE LOWER(?)
-                    OR UPPER(COALESCE(v.dvd_id, '')) LIKE UPPER(?)
-                    OR COALESCE(v.title_en, '') ILIKE ?
-                    OR COALESCE(v.title_ja, '') ILIKE ?
-            """
+            where_clauses.append(
+                "(" + " OR ".join([
+                    "LOWER(v.content_id) = LOWER(?)",
+                    "UPPER(COALESCE(v.dvd_id, '')) = UPPER(?)",
+                    "LOWER(v.content_id) LIKE LOWER(?)",
+                    "UPPER(COALESCE(v.dvd_id, '')) LIKE UPPER(?)",
+                    "COALESCE(v.title_en, '') ILIKE ?",
+                    "COALESCE(v.title_ja, '') ILIKE ?",
+                ]) + ")"
+            )
             params.extend(
                 [
                     normalized_query,
@@ -140,12 +152,76 @@ class DuckDBVideoRepository:
                 ]
             )
 
+        if normalized_tags:
+            joins.append(
+                f"LEFT JOIN {self._table('video_category')} AS vc ON vc.content_id = v.content_id"
+            )
+            joins.append(
+                f"LEFT JOIN {self._table('category')} AS c ON c.id = vc.category_id"
+            )
+            tag_conditions: list[str] = []
+            for tag in normalized_tags:
+                tag_conditions.append(
+                    "(" + " OR ".join([
+                        "COALESCE(c.name_en, '') ILIKE ?",
+                        "COALESCE(c.name_ja, '') ILIKE ?",
+                    ]) + ")"
+                )
+                params.extend([f"%{tag}%", f"%{tag}%"])
+            where_clauses.append("(" + " OR ".join(tag_conditions) + ")")
+
+        if normalized_actress:
+            joins.append(
+                f"LEFT JOIN {self._table('video_actress')} AS va ON va.content_id = v.content_id"
+            )
+            joins.append(
+                f"LEFT JOIN {self._table('actress')} AS a ON a.id = va.actress_id"
+            )
+            actress_conditions: list[str] = []
+            for name in normalized_actress:
+                actress_conditions.append(
+                    "(" + " OR ".join([
+                        "COALESCE(a.name_romaji, '') ILIKE ?",
+                        "COALESCE(a.name_kanji, '') ILIKE ?",
+                        "COALESCE(a.name_kana, '') ILIKE ?",
+                    ]) + ")"
+                )
+                params.extend([f"%{name}%", f"%{name}%", f"%{name}%"])
+            where_clauses.append("(" + " OR ".join(actress_conditions) + ")")
+
+        if normalized_studio:
+            joins.append(
+                f"LEFT JOIN {self._table('label')} AS label ON label.id = v.label_id"
+            )
+            studio_like = f"%{normalized_studio}%"
+            where_clauses.append(
+                "(" + " OR ".join([
+                    "COALESCE(maker.name_en, '') ILIKE ?",
+                    "COALESCE(maker.name_ja, '') ILIKE ?",
+                    "COALESCE(label.name_en, '') ILIKE ?",
+                    "COALESCE(label.name_ja, '') ILIKE ?",
+                ]) + ")"
+            )
+            params.extend([studio_like, studio_like, studio_like, studio_like])
+
+        if normalized_release_date is not None:
+            where_clauses.append("CAST(v.release_date AS DATE) < ?")
+            params.append(normalized_release_date.isoformat())
+
+        if dvd_only:
+            where_clauses.append("v.dvd_id IS NOT NULL")
+
+        where_sql = ""
+        if where_clauses:
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+
+        join_sql = "\n".join(joins)
         con = self.store.connect(read_only=True)
         try:
             rows = self._fetch_all(
                 con,
                 f"""
-                SELECT
+                SELECT DISTINCT
                     v.content_id,
                     v.dvd_id,
                     COALESCE(v.title_en, v.title_ja, v.content_id) AS title,
@@ -153,6 +229,7 @@ class DuckDBVideoRepository:
                     v.title_ja,
                     v.release_date,
                     v.sample_url,
+                    v.jacket_full_url,
                     v.jacket_thumb_url,
                     maker.name_en AS maker_name_en,
                     maker.name_ja AS maker_name_ja,
@@ -163,6 +240,7 @@ class DuckDBVideoRepository:
                     ON maker.id = v.maker_id
                 LEFT JOIN {self._table('series')} AS series
                     ON series.id = v.series_id
+                {join_sql}
                 {where_sql}
                 ORDER BY v.release_date DESC NULLS LAST, v.content_id
                 LIMIT ?
@@ -170,12 +248,20 @@ class DuckDBVideoRepository:
                 """,
                 [*params, limit + 1, offset],
             )
+
+            items = rows[:limit]
+            for item in items:
+                item["jacket_full_url"] = self._build_image_url(item.get("jacket_full_url"))
+                item["jacket_thumb_url"] = self._build_image_url(item.get("jacket_thumb_url"))
+                if item.get("title_en") is None and item.get("title_ja"):
+                    title_en, _ = self._resolve_english_text(
+                        con,
+                        existing_en=None,
+                        source_ja=item.get("title_ja"),
+                    )
+                    item["title_en"] = title_en
         finally:
             con.close()
-
-        items = rows[:limit]
-        for item in items:
-            item["jacket_thumb_url"] = self._build_image_url(item.get("jacket_thumb_url"))
 
         return {
             "has_more": len(rows) > limit,
@@ -283,7 +369,7 @@ class DuckDBVideoRepository:
         con: duckdb.DuckDBPyConnection,
         content_id: str,
     ) -> list[dict[str, Any]]:
-        return self._fetch_all(
+        actresses = self._fetch_all(
             con,
             f"""
             SELECT DISTINCT
@@ -300,13 +386,24 @@ class DuckDBVideoRepository:
             """,
             [content_id],
         )
+        for actress in actresses:
+            if not actress.get("name_romaji") and actress.get("name_kanji"):
+                name_romaji, _ = self._resolve_english_text(
+                    con,
+                    existing_en=None,
+                    source_ja=actress.get("name_kanji"),
+                )
+                if not name_romaji:
+                    name_romaji = self._transliterate_kana_to_romaji(actress.get("name_kanji"))
+                actress["name_romaji"] = name_romaji
+        return actresses
 
     def _fetch_actors(
         self,
         con: duckdb.DuckDBPyConnection,
         content_id: str,
     ) -> list[dict[str, Any]]:
-        return self._fetch_all(
+        actors = self._fetch_all(
             con,
             f"""
             SELECT DISTINCT
@@ -323,13 +420,24 @@ class DuckDBVideoRepository:
             """,
             [content_id],
         )
+        for actor in actors:
+            if not actor.get("name_romaji") and actor.get("name_kana"):
+                name_romaji, _ = self._resolve_english_text(
+                    con,
+                    existing_en=None,
+                    source_ja=actor.get("name_kana"),
+                )
+                if not name_romaji:
+                    name_romaji = self._transliterate_kana_to_romaji(actor.get("name_kana"))
+                actor["name_romaji"] = name_romaji
+        return actors
 
     def _fetch_directors(
         self,
         con: duckdb.DuckDBPyConnection,
         content_id: str,
     ) -> list[dict[str, Any]]:
-        return self._fetch_all(
+        directors = self._fetch_all(
             con,
             f"""
             SELECT DISTINCT
@@ -345,6 +453,17 @@ class DuckDBVideoRepository:
             """,
             [content_id],
         )
+        for director in directors:
+            if not director.get("name_romaji") and director.get("name_kana"):
+                name_romaji, _ = self._resolve_english_text(
+                    con,
+                    existing_en=None,
+                    source_ja=director.get("name_kana"),
+                )
+                if not name_romaji:
+                    name_romaji = self._transliterate_kana_to_romaji(director.get("name_kana"))
+                director["name_romaji"] = name_romaji
+        return directors
 
     def _fetch_authors(
         self,
@@ -518,6 +637,106 @@ class DuckDBVideoRepository:
         if row is None:
             return None
         return row.get("target_en")
+
+    def _transliterate_kana_to_romaji(self, text: str) -> str | None:
+        if not text:
+            return None
+
+        def normalize_katakana(s: str) -> str:
+            normalized = []
+            for ch in s:
+                if "ァ" <= ch <= "ン":
+                    normalized.append(chr(ord(ch) - 0x60))
+                else:
+                    normalized.append(ch)
+            return "".join(normalized)
+
+        kana = normalize_katakana(text.strip())
+
+        kana_map = {
+            "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
+            "か": "ka", "き": "ki", "く": "ku", "け": "ke", "こ": "ko",
+            "さ": "sa", "し": "shi", "す": "su", "せ": "se", "そ": "so",
+            "た": "ta", "ち": "chi", "つ": "tsu", "て": "te", "と": "to",
+            "な": "na", "に": "ni", "ぬ": "nu", "ね": "ne", "の": "no",
+            "は": "ha", "ひ": "hi", "ふ": "fu", "へ": "he", "ほ": "ho",
+            "ま": "ma", "み": "mi", "む": "mu", "め": "me", "も": "mo",
+            "や": "ya", "ゆ": "yu", "よ": "yo",
+            "ら": "ra", "り": "ri", "る": "ru", "れ": "re", "ろ": "ro",
+            "わ": "wa", "を": "wo", "ん": "n",
+            "が": "ga", "ぎ": "gi", "ぐ": "gu", "げ": "ge", "ご": "go",
+            "ざ": "za", "じ": "ji", "ず": "zu", "ぜ": "ze", "ぞ": "zo",
+            "だ": "da", "ぢ": "ji", "づ": "zu", "で": "de", "ど": "do",
+            "ば": "ba", "び": "bi", "ぶ": "bu", "べ": "be", "ぼ": "bo",
+            "ぱ": "pa", "ぴ": "pi", "ぷ": "pu", "ぺ": "pe", "ぽ": "po",
+            "きゃ": "kya", "きゅ": "kyu", "きょ": "kyo",
+            "しゃ": "sha", "しゅ": "shu", "しょ": "sho",
+            "ちゃ": "cha", "ちゅ": "chu", "ちょ": "cho",
+            "にゃ": "nya", "にゅ": "nyu", "にょ": "nyo",
+            "ひゃ": "hya", "ひゅ": "hyu", "ひょ": "hyo",
+            "みゃ": "mya", "みゅ": "myu", "みょ": "myo",
+            "りゃ": "rya", "りゅ": "ryu", "りょ": "ryo",
+            "ぎゃ": "gya", "ぎゅ": "gyu", "ぎょ": "gyo",
+            "じゃ": "ja", "じゅ": "ju", "じょ": "jo",
+            "ぢゃ": "ja", "ぢゅ": "ju", "ぢょ": "jo",
+            "びゃ": "bya", "びゅ": "byu", "びょ": "byo",
+            "ぴゃ": "pya", "ぴゅ": "pyu", "ぴょ": "pyo",
+            "ふぁ": "fa", "ふぃ": "fi", "ふぇ": "fe", "ふぉ": "fo",
+            "ゔぁ": "va", "ゔぃ": "vi", "ゔ": "vu", "ゔぇ": "ve", "ゔぉ": "vo",
+            "っ": "",
+            "ー": "-",
+            "。": ".", "、": ",", "・": " ", "「": "", "」": "", "『": "", "』": "",
+        }
+
+        # Add katakana sequence mappings too.
+        for key, value in list(kana_map.items()):
+            if all("ぁ" <= ch <= "ゖ" for ch in key):
+                katakana_key = "".join(chr(ord(ch) + 0x60) for ch in key)
+                kana_map[katakana_key] = value
+
+        def last_vowel(romaji: str) -> str:
+            for ch in reversed(romaji):
+                if ch in "aeiou":
+                    return ch
+            return ""
+
+        result: list[str] = []
+        i = 0
+        while i < len(kana):
+            if kana[i] == "っ" and i + 1 < len(kana):
+                next_seq = kana[i + 1:i + 3]
+                if next_seq in kana_map:
+                    consonant = kana_map[next_seq][0]
+                else:
+                    next_seq = kana[i + 1]
+                    consonant = kana_map.get(next_seq, "")[0] if kana_map.get(next_seq) else ""
+                if consonant:
+                    result.append(consonant)
+                i += 1
+                continue
+
+            pair = kana[i:i + 2]
+            if pair in kana_map:
+                romaji = kana_map[pair]
+                if romaji == "-" and result:
+                    result.append(last_vowel(result[-1]))
+                else:
+                    result.append(romaji)
+                i += 2
+                continue
+
+            single = kana[i]
+            romaji = kana_map.get(single)
+            if romaji == "-" and result:
+                result.append(last_vowel(result[-1]))
+            elif romaji is not None:
+                result.append(romaji)
+            else:
+                result.append(single)
+            i += 1
+
+        romaji_text = "".join(result)
+        return romaji_text.replace("nn", "n")
 
     def _build_image_url(self, path: str | None) -> str | None:
         if not path:

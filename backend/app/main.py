@@ -1,23 +1,55 @@
 from __future__ import annotations
-
+from selenium.webdriver.chrome.service import Service
 import json
+import os
 import re
+import time
 from contextlib import asynccontextmanager
+from datetime import date
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from .get_trailer import get_m3u8_links
+from .get_trailer import get_video_urls
+from fastapi import Response
+
 import requests
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.options import Options
+from selenium import webdriver
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+try:
+    import undetected_chromedriver as uc
+    from selenium.common.exceptions import WebDriverException, TimeoutException
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    from webdriver_manager.chrome import ChromeDriverManager
+except ImportError:  # pragma: no cover
+    uc = None
+    WebDriverException = None
+    TimeoutException = None
+    ChromeOptions = None
+    By = None
+    EC = None
+    WebDriverWait = None
+    ChromeService = None
+    ChromeDriverManager = None
 
 from .config import get_settings
 from .manhwa_repository import ManhwaRepository, get_manhwa_repository
 from .repository import DuckDBVideoRepository, get_duckdb_store
 from .schemas import (
+    FullVideoResponse,
     ManhwaChapterResponse,
     ManhwaDetailsResponse,
     ManhwaListResponse,
+    TrailerResponse,
     VideoDetailsResponse,
     VideoListResponse,
 )
@@ -60,14 +92,122 @@ def health() -> dict[str, str]:
 
 @app.get("/api/jav/videos", response_model=VideoListResponse, tags=["JAV"])
 def list_videos(
-    limit: int = Query(default=18, ge=1, le=60),
+    limit: int = Query(default=500, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(
         default=None,
         description="Filter JAV tiles by content ID, DVD ID, or title.",
     ),
+    release_date: date | None = Query(
+        default=None,
+        description="Return videos with release_date earlier than this date.",
+    ),
 ) -> VideoListResponse:
-    payload = get_repository().list_videos(limit=limit, offset=offset, query=q)
+    payload = get_repository().list_videos(
+        limit=limit,
+        offset=offset,
+        query=q,
+        release_date=release_date,
+        dvd_only=True,
+    )
+    return VideoListResponse.model_validate(payload)
+
+
+@app.get("/api/jav/videos/by-tags", response_model=VideoListResponse, tags=["JAV"])
+def list_videos_by_tags(
+    limit: int = Query(default=18, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    tags: list[str] = Query(
+        default=[],
+        description="JAV tag names to filter by. Use repeated query params for multiple tags.",
+    ),
+    release_date: date | None = Query(
+        default=None,
+        description="Return videos with release_date earlier than this date.",
+    ),
+) -> VideoListResponse:
+    payload = get_repository().list_videos(
+        limit=limit,
+        offset=offset,
+        tags=tags,
+        release_date=release_date,
+    )
+    return VideoListResponse.model_validate(payload)
+
+
+@app.get("/api/jav/videos/by-actress", response_model=VideoListResponse, tags=["JAV"])
+def list_videos_by_actress(
+    limit: int = Query(default=18, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    actress: list[str] = Query(
+        default=[],
+        description="Actress names to filter by. Use repeated query params for multiple actress names.",
+    ),
+    release_date: date | None = Query(
+        default=None,
+        description="Return videos with release_date earlier than this date.",
+    ),
+) -> VideoListResponse:
+    payload = get_repository().list_videos(
+        limit=limit,
+        offset=offset,
+        actress=actress,
+        release_date=release_date,
+    )
+    return VideoListResponse.model_validate(payload)
+
+
+@app.get("/api/jav/videos/by-studio", response_model=VideoListResponse, tags=["JAV"])
+def list_videos_by_studio(
+    limit: int = Query(default=18, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    studio: str | None = Query(
+        default=None,
+        description="Search videos by studio name, matching maker or label.",
+    ),
+    release_date: date | None = Query(
+        default=None,
+        description="Return videos with release_date earlier than this date.",
+    ),
+) -> VideoListResponse:
+    payload = get_repository().list_videos(
+        limit=limit,
+        offset=offset,
+        studio=studio,
+        release_date=release_date,
+    )
+    return VideoListResponse.model_validate(payload)
+
+
+@app.get("/api/jav/videos/search", response_model=VideoListResponse, tags=["JAV"])
+def search_videos(
+    limit: int = Query(default=18, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    tags: list[str] = Query(
+        default=[],
+        description="JAV tag names to filter by. Use repeated query params for multiple tags.",
+    ),
+    actress: list[str] = Query(
+        default=[],
+        description="Actress names to filter by. Use repeated query params for multiple names.",
+    ),
+    studio: str | None = Query(
+        default=None,
+        description="Studio name to filter by, matching either maker or label.",
+    ),
+    release_date: date | None = Query(
+        default=None,
+        description="Return videos with release_date earlier than this date.",
+    ),
+) -> VideoListResponse:
+    payload = get_repository().list_videos(
+        limit=limit,
+        offset=offset,
+        tags=tags,
+        actress=actress,
+        studio=studio,
+        release_date=release_date,
+    )
     return VideoListResponse.model_validate(payload)
 
 
@@ -100,6 +240,56 @@ def get_video_details(
 
     return VideoDetailsResponse.model_validate(payload)
 
+
+@app.get("/api/proxy/m3u8")
+def proxy_m3u8(url: str):
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.dmm.co.jp/",
+            "Origin": "https://www.dmm.co.jp",
+            "Accept": "*/*",
+        }
+
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        return Response(
+            content=response.text,
+            media_type="application/vnd.apple.mpegurl",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/api/video/trailer", response_model=TrailerResponse, tags=["JAV"])
+async def get_video_trailer(dvd_id: str):
+    links = get_m3u8_links(dvd_id)
+    new_links = []
+    for link in links:
+        if link.find("media"):
+            new_links.append(link)
+    if not links:
+        raise HTTPException(status_code=404, detail="Trailer not found.")
+    
+    return TrailerResponse(trailer=','.join(new_links))
+
+@app.get("/api/video/fullVideo", response_model=FullVideoResponse, tags=["JAV"])
+async def get_video_fullVideo(dvd_id: str):
+    links = get_video_urls(dvd_id)
+    
+    if not links:
+        raise HTTPException(status_code=404, detail="Trailer not found.")
+    
+    return FullVideoResponse(fullVideo=','.join(links))
+
+####################################################
+# MANHWA
+####################################################
 
 @app.get("/api/manhwa", response_model=ManhwaListResponse, tags=["Manhwa"])
 def list_manhwa_titles() -> ManhwaListResponse:

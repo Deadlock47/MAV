@@ -40,6 +40,7 @@ class HistrionInfo(BaseModel):
 class VideoTileResponse(BaseModel):
     content_id: str
     dvd_id: str | None = None
+    jacket_full_url: str | None = None
     jacket_thumb_url: str | None = None
     maker_name_en: str | None = None
     maker_name_ja: str | None = None
@@ -92,6 +93,14 @@ class VideoDetailsResponse(BaseModel):
     title_en_is_machine_translation: bool = False
     title_en_uncensored: str | None = None
     title_ja: str | None = None
+
+
+class TrailerResponse(BaseModel):
+    trailer: str
+
+
+class FullVideoResponse(BaseModel):
+    fullVideo: str
 
 
 class ManhwaChapterLink(BaseModel):

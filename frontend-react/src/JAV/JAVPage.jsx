@@ -1,18 +1,38 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import SearchBar from '../components/SearchBar'
 import { NavLink } from 'react-router-dom'
+import { fetchJavs } from './Helpers/Fetch'
+import Jav_Items from '../components/Jav_Items'
 
 function JAVPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchBy, setSearchBy] = useState('Code')
   const [showCodes, setShowCodes] = useState(false)
-  const features = [
-    { icon: '🎥', title: 'Video Library', desc: 'Browse extensive video collection with advanced filters' },
-    { icon: '❤️', title: 'Watchlist', desc: 'Save your favorite videos for quick access' },
-    { icon: '📊', title: 'Statistics', desc: 'Track your viewing history and preferences' },
-    { icon: '🔍', title: 'Search & Filter', desc: 'Find exactly what you\'re looking for instantly' },
-  ]
+  const [loading,setLoading] = useState(true)
+  const [codes, setCodes] = useState([])
 
+  let offset = 0 , limit = 60;
+  async function fetchJAV(){
+    setLoading(true);
+    const release_date = "2025-05-10";
+    const resp = await fetchJavs(limit,offset,release_date); 
+    
+    // let temp = codes
+    // for( let res of resp.items){
+    //   const rel_date = new Date(res.release_date)
+    //   if( res.dvd_id != null && rel_date <= now)  
+    //     temp.push(res)
+    // }
+    setCodes(resp.items)
+    
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    // fetch javs
+    fetchJAV();
+    console.log(codes)
+  }, [])
   return (
      <div className="space-y-6 pb-8">
          <div className="flex w-full gap-4 p-2 pl-4 pr-4 items-center justify-center bg-zinc-900/70 backdrop-blur-lg rounded-2xl border border-zinc-800 shadow-2xl">
@@ -71,22 +91,17 @@ function JAVPage() {
             />
             <button
               type="submit"
-              className="inline-flex items-center justify-center rounded-2xl bg-linear-to-r from-dark-blue-600 to-purple-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-dark-blue-600/30 transition-all duration-200 hover:brightness-110"
+              className="inline-flex items-center justify-center rounded-2xl bg-linear-to-r from-neutral-900 to-purple-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-dark-blue-600/30 transition-all duration-200 hover:brightness-110"
             >
               Search
             </button>
-          </div>
-
-        </div>
-        {/* Content Page  */}
-       
-
-        <div className="flex flex-row justify-between mt-4">
-          <div className="text-3xl text-nowrap  bg-purple-800 outline-amber-50 outline-1 rounded-2xl  md:text-2xl px-4 py-1 font-bold mb-4 gradient-text dark:gradient-text-dark">
+            <div 
+            className="inline-flex items-center justify-center rounded-2xl bg-linear-to-r from-neutral-900 to-purple-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-dark-blue-600/30 transition-all duration-200 hover:brightness-110"
+            >
             Filter
           </div>
           <div className='w-fit h-fit gap-2 flex flex-row'>
-            <label className="flex items-center gap-3 rounded-md p-2 text-white">
+            <label className="flex text-[14px] text-nowrap items-center gap-3 rounded-md p-2 text-white">
               <input
                 type="checkbox"
                 checked={showCodes}
@@ -97,12 +112,24 @@ function JAVPage() {
               All Codes
             </label>
           </div>
-        </div>
-        {showCodes && (
-          <div className="rounded-md bg-zinc-900/80 p-4 text-white outline-1 outline-white/20">
-            Your codes will show here.
+        
           </div>
-        )}
+
+        </div>
+        {/* Content Page  */}
+       
+       <div className="mt-10" >
+            {!loading ?  (
+              <div className='flex gap-8 items-center justify-center flex-row flex-wrap w-full h-full'>
+           {   codes.map((code) => (
+                <Jav_Items key={code.dvd_id} dvd_id={code.dvd_id} title={code.title_en?.length > 0 ? code.title_en : code.title} poster_url={code.jacket_full_url} />
+              ))}
+              </div>
+            ) : <div className='text-3xl flex justify-center items-center w-full h-full' >
+              Loading...
+              </div>
+          }
+        </div>
       </div>
     </div>
   )

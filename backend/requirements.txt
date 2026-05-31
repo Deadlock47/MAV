@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 duckdb
 beautifulsoup4
+selenium
+webdriver-manager
+undetected-chromedriver

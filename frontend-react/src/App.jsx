@@ -4,6 +4,7 @@ import ManhwaPage from './Manhwa/ManhwaPage'
 import JAVPage from './JAV/JAVPage'
 import ManhwaDetail from './Manhwa/Pages/ManhwaDetail'
 import ChapterDetail from './Manhwa/Pages/ChapterDetail'
+import JAVDetails from './JAV/Pages/JAVDetails'
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
             <Route path='/manhwa/details/:slug' element={<ManhwaDetail></ManhwaDetail>}/>
             <Route path='/manhwa/:slug/chapter/:chapter_number' element={<ChapterDetail></ChapterDetail>}/>
             <Route path="/jav" element={<JAVPage />} />
+            <Route path="/jav/:dvd_id" element={<JAVDetails />} />
             <Route path="*" element={<Navigate replace to="/manhwa" />} />
           </Routes>
         </div>
